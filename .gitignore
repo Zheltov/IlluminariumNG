@@ -1,0 +1,15 @@
+# .NET build and test output
+[Bb]in/
+[Oo]bj/
+TestResults/
+
+# Local IDE state
+.idea/
+.vs/
+*.user
+*.suo
+*.sln.DotSettings.user
+
+# OS metadata
+.DS_Store
+Thumbs.db
