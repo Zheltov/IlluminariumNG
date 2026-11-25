@@ -85,7 +85,7 @@ internal sealed partial class EditorWindow
             }
         }
 
-        var snapshot = new LightingProject(Room, Lights.ToArray());
+        var snapshot = new LightingProject(Room, Lights.ToArray()) { Elements = _scene.Elements };
         var revision = _scene.Revision;
         await ProjectFile.SaveAsync(path, snapshot);
         _projectPath = path;
@@ -117,12 +117,14 @@ internal sealed partial class EditorWindow
         if (previouslySaved != _savedRevision && string.Equals(path, _projectPath,
             OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
                 ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
-            project = new LightingProject(Room, Lights.ToArray());
+            project = new LightingProject(Room, Lights.ToArray()) { Elements = _scene.Elements };
 
         _projectPath = path;
-        _scene.Replace(project.Room, project.Lights);
+        _scene.Replace(project.Room, project.Lights, project.Elements);
         _height.Text = Room.Height.ToString();
         _plan.CancelOutline();
+        _plan.CancelInterior();
+        RefreshInteriorSelection(null);
         Selected = -1;
         _savedRevision = _scene.Revision;
         SceneChanged();

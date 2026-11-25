@@ -68,6 +68,7 @@ internal sealed partial class EditorWindow : Window
         cancel.Click += (_, _) =>
         {
             _plan.CancelOutline();
+            _plan.CancelInterior();
             Refresh();
         };
         var setHeight = new Button { Content = "Задать высоту" };
@@ -101,6 +102,7 @@ internal sealed partial class EditorWindow : Window
         header.Children.Add(Label("Проект освещения", 27, Brushes.White, FontWeight.SemiBold));
         header.Children.Add(ProjectToolbar());
         header.Children.Add(outlineToolbar);
+        header.Children.Add(InteriorToolbar());
         header.Children.Add(toolbar);
         var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 12 };
         Grid.SetColumn(_selection, 1);

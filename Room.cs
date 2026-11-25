@@ -92,6 +92,52 @@ internal sealed class Room
         return inside;
     }
 
+    public WallSpan Wall(int index) => new(Vertices[index], Vertices[(index + 1) % Vertices.Count]);
+
+    public bool ContainsSegment(RoomPoint start, RoomPoint end, bool requireInterior = false)
+    {
+        if (start == end || !Contains(start) || !Contains(end))
+            return false;
+
+        // Between successive intersections with the boundary, the segment has constant membership.
+        var vertical = Math.Abs(end.Y - start.Y) > Math.Abs(end.X - start.X);
+        double Parameter(RoomPoint point) => vertical
+            ? (point.Y - start.Y) / (end.Y - start.Y)
+            : (point.X - start.X) / (end.X - start.X);
+
+        var parameters = new List<double> { 0, 1 };
+        for (var i = 0; i < Vertices.Count; i++)
+        {
+            var (a, b) = Wall(i);
+            if (OnSegment(start, end, a))
+                parameters.Add(Math.Clamp(Parameter(a), 0, 1));
+
+            if (Side(start, end, a) * Side(start, end, b) < 0 &&
+                Side(a, b, start) * Side(a, b, end) < 0)
+            {
+                var from = Cross(a, b, start);
+                var to = Cross(a, b, end);
+                parameters.Add(from / (from - to));
+            }
+        }
+
+        parameters.Sort();
+        var hasInterior = false;
+        for (var i = 1; i < parameters.Count; i++)
+        {
+            if (parameters[i] == parameters[i - 1])
+                continue;
+            var t = (parameters[i - 1] + parameters[i]) / 2;
+            var point = new RoomPoint(start.X + (end.X - start.X) * t, start.Y + (end.Y - start.Y) * t);
+            if (!Contains(point))
+                return false;
+            hasInterior |= !Enumerable.Range(0, Vertices.Count).Any(j =>
+                OnSegment(Vertices[j], Vertices[(j + 1) % Vertices.Count], point));
+        }
+
+        return !requireInterior || hasInterior;
+    }
+
     public RoomPoint InteriorPoint()
     {
         var center = new RoomPoint(MinX + Width / 2, MinY + Depth / 2);

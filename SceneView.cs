@@ -43,14 +43,7 @@ internal sealed partial class SceneView(EditorWindow editor, bool orbitView) : C
         if (orbitView)
         {
             for (var i = 0; i < corners.Count; i++)
-            {
-                var (x, y) = corners[i];
-                var (nextX, nextY) = corners[(i + 1) % corners.Count];
-                var across = Math.Cos(_angle) * (nextX - x) - Math.Sin(_angle) * (nextY - y);
-                if (across * room.Winding > 0)
-                    Polygon(context, Wall, Edge, Project(x, y), Project(nextX, nextY),
-                        Project(nextX, nextY, room.Height), Project(x, y, room.Height));
-            }
+                DrawRoomWall(context, i);
         }
 
         var floor = Shape(corners.Select(p => Project(p.X, p.Y)).ToArray());
@@ -85,6 +78,7 @@ internal sealed partial class SceneView(EditorWindow editor, bool orbitView) : C
             }
         }
 
+        DrawInterior(context);
         DrawOutlineEditor(context);
 
         foreach (var index in LightDrawOrder())
@@ -162,7 +156,7 @@ internal sealed partial class SceneView(EditorWindow editor, bool orbitView) : C
 
     private Point Marker(Luminaire light) => Project(light.Position.X, light.Position.Y, editor.Room.Height);
 
-    protected override void OnPointerPressed(PointerPressedEventArgs e)
+    protected override async void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
         if (_pointer != null)
@@ -175,8 +169,26 @@ internal sealed partial class SceneView(EditorWindow editor, bool orbitView) : C
         if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
             return;
 
+        if (!orbitView && _interiorTool is not null)
+        {
+            e.Handled = true;
+            await PlaceInterior(point);
+            return;
+        }
+
         var hit = LightDrawOrder().Reverse()
             .FirstOrDefault(index => WithinMarker(Marker(editor.Lights[index]), point), -1);
+        if (!orbitView)
+        {
+            var element = hit < 0 ? InteriorHit(point) : null;
+            editor.SelectInterior(element);
+            if (element is not null)
+            {
+                editor.Select(-1);
+                e.Handled = true;
+                return;
+            }
+        }
         if (hit < 0 && !orbitView)
         {
             editor.Select(-1);

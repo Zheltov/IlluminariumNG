@@ -1,20 +1,29 @@
+using System.Collections.Immutable;
 using System.Numerics;
 using System.Text.Json;
 
 namespace Lighting;
 
-internal sealed record LightingProject(Room Room, Luminaire[] Lights);
+internal sealed record LightingProject(Room Room, Luminaire[] Lights)
+{
+    public IReadOnlyList<InteriorElement> Elements { get; init; } = Array.Empty<InteriorElement>();
+}
 
 internal static class ProjectFile
 {
-    private const int Version = 2;
+    private const int Version = 4;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
     };
 
     private sealed record LegacyProjectData(double Width, double Depth, LightData?[]? Lights);
-    private sealed record ProjectData(int FormatVersion, double Height, VertexData?[]? Vertices, LightData?[]? Lights);
+    private sealed record ProjectData(int FormatVersion, double Height, VertexData?[]? Vertices, LightData?[]? Lights,
+        ElementData?[]? Elements);
+    private sealed record ElementData(string? Type, double? Height, int? Wall = null,
+        double? Offset = null, double? Width = null, double? Bottom = null,
+        VertexData? Start = null, VertexData? End = null, OpeningData?[]? Openings = null);
+    private sealed record OpeningData(double? Offset, double? Width, double? Bottom, double? Height);
     private sealed record VertexData(double? X, double? Y);
     private sealed record LightData(float? X, float? Y, double[]? Vertical, double[]? Horizontal, double[]?[]? Candela);
 
@@ -28,6 +37,7 @@ internal static class ProjectFile
             throw new FormatException("В файле отсутствует корректная версия формата проекта.");
         Room room;
         LightData?[]? lightData;
+        InteriorElement[] elements = [];
         switch (number)
         {
             case 1:
@@ -37,6 +47,8 @@ internal static class ProjectFile
                 room = new Room(legacy.Width, legacy.Depth);
                 lightData = legacy.Lights;
                 break;
+            case 2:
+            case 3:
             case Version:
                 var data = root.Deserialize<ProjectData>(JsonOptions)!;
                 if (data.Vertices is null || data.Vertices.Any(p => p?.X is null || p.Y is null))
@@ -48,6 +60,15 @@ internal static class ProjectFile
                 catch (ArgumentException error)
                 {
                     throw new FormatException(error.Message, error);
+                }
+                if (number >= 3)
+                {
+                    if (data.Elements is null)
+                        throw new FormatException("В файле отсутствует список элементов помещения.");
+                    elements = data.Elements.Select(element => ReadElement(element, number == Version)).ToArray();
+                    var error = InteriorGeometry.Validate(room, elements);
+                    if (error is not null)
+                        throw new FormatException(error);
                 }
                 lightData = data.Lights;
                 break;
@@ -61,8 +82,43 @@ internal static class ProjectFile
         var lights = new Luminaire[lightData.Length];
         for (var i = 0; i < lights.Length; i++)
             lights[i] = ReadLight(room, lightData[i], i + 1, number == 1);
-        return new LightingProject(room, lights);
+        return new LightingProject(room, lights) { Elements = Array.AsReadOnly(elements) };
     }
+
+    private static InteriorElement ReadElement(ElementData? data, bool readPartitionOpenings) => data switch
+    {
+        { Type: "opening", Height: double height, Wall: int wall, Offset: double offset,
+          Width: double width, Bottom: double bottom } => new WallOpening(wall, offset, width, bottom, height),
+        { Type: "partition", Height: double height, Start: { X: double x1, Y: double y1 },
+          End: { X: double x2, Y: double y2 } } => new Partition(new(x1, y1), new(x2, y2), height)
+          {
+              Openings = readPartitionOpenings ? ReadOpenings(data.Openings) : []
+          },
+        { Type: "obstacle", Height: double height, Start: { X: double x1, Y: double y1 },
+          End: { X: double x2, Y: double y2 } } => new BoxObstacle(new(x1, y1), new(x2, y2), height),
+        _ => throw new FormatException("Некорректное описание элемента помещения.")
+    };
+
+    private static ImmutableArray<OpeningCut> ReadOpenings(OpeningData?[]? openings)
+    {
+        if (openings is null)
+            throw new FormatException("В файле отсутствует список проёмов перегородки.");
+        return [.. openings.Select(opening => opening is
+            { Offset: double offset, Width: double width, Bottom: double bottom, Height: double height }
+            ? new OpeningCut(offset, width, bottom, height)
+            : throw new FormatException("Некорректные параметры проёма в перегородке."))];
+    }
+
+    private static ElementData WriteElement(InteriorElement element) => element switch
+    {
+        WallOpening opening => new("opening", opening.Height, opening.Wall, opening.Offset, opening.Width, opening.Bottom),
+        Partition partition => new("partition", partition.Height,
+            Start: new(partition.Start.X, partition.Start.Y), End: new(partition.End.X, partition.End.Y),
+            Openings: partition.Openings.Select(cut => new OpeningData(cut.Offset, cut.Width, cut.Bottom, cut.Height)).ToArray()),
+        BoxObstacle obstacle => new("obstacle", obstacle.Height,
+            Start: new(obstacle.First.X, obstacle.First.Y), End: new(obstacle.Opposite.X, obstacle.Opposite.Y)),
+        _ => throw new ArgumentException("Неизвестный тип элемента помещения.", nameof(element))
+    };
 
     private static Luminaire ReadLight(Room room, LightData? data, int number, bool legacy)
     {
@@ -99,7 +155,7 @@ internal static class ProjectFile
             light.Distribution.Vertical, light.Distribution.Horizontal, light.Distribution.Candela)).ToArray();
         var vertices = project.Room.Vertices.Select(p => new VertexData(p.X, p.Y)).ToArray();
         return JsonSerializer.SerializeAsync(stream,
-            new ProjectData(Version, project.Room.Height, vertices, lights), JsonOptions);
+            new ProjectData(Version, project.Room.Height, vertices, lights, project.Elements.Select(WriteElement).ToArray()), JsonOptions);
     }
 
     public static async Task SaveAsync(string path, LightingProject project)

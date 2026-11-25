@@ -12,6 +12,7 @@ internal sealed partial class SceneView
 
     public void BeginOutline(bool drawing)
     {
+        CancelInterior();
         _drawing = drawing;
         _outline = drawing ? [] : editor.Room.Vertices.ToList();
         InvalidateVisual();
