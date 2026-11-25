@@ -33,7 +33,7 @@ IlluminariumNG — настольный редактор внутреннего 
 | Этап | Ближайшие изменения OpenSpec | Состояние |
 | --- | --- | --- |
 | Основа PoC | [Сохранение и открытие проекта](openspec/changes/archive/2026-11-25-save-open-lighting-project/proposal.md) | Архивировано. Перенос файлов проверим в ретроспективном прогоне Windows |
-| 1. Редактор помещения | [`polygonal-room-editor`](openspec/changes/archive/2026-11-25-polygonal-room-editor/proposal.md) — контур по точкам и высота → [`room-interior-elements`](openspec/changes/archive/2026-11-25-room-interior-elements/proposal.md) — проёмы, перегородки и препятствия → [`plan-snapping-and-undo`](openspec/changes/plan-snapping-and-undo/proposal.md) — привязки и отмена | Контур и элементы помещения архивированы. План последнего изменения этапа готов |
+| 1. Редактор помещения | [`polygonal-room-editor`](openspec/changes/archive/2026-11-25-polygonal-room-editor/proposal.md) — контур по точкам и высота → [`room-interior-elements`](openspec/changes/archive/2026-11-25-room-interior-elements/proposal.md) — проёмы, перегородки и препятствия → [`plan-snapping-and-undo`](openspec/changes/archive/2026-11-25-plan-snapping-and-undo/proposal.md) — привязки и отмена | Этап завершён. Приёмка на macOS пройдена. Все изменения этапа архивированы |
 | 2. Каталог и расстановка | Локальный каталог и импорт IES → высота и ориентация экземпляров | Запланировано |
 | 3. Прямой свет | Расчётные поверхности и сетки → проверка перекрытия лучей → прогресс и отмена | Запланировано |
 | 4. Многократные отражения | Коэффициенты отражения → расчёт нескольких отражений → режимы качества и проверка на эталонных сценах | Запланировано |

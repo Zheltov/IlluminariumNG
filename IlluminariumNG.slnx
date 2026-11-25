@@ -1,6 +1,4 @@
 <Solution>
-  <Project Path="Lighting.csproj" />
-  <Folder Name="/tests/">
-    <Project Path="tests/Lighting.Tests/Lighting.Tests.csproj" />
-  </Folder>
+  <Project Path="IlluminariumNG/IlluminariumNG.csproj" />
+  <Project Path="IlluminariumNG.Tests/IlluminariumNG.Tests.csproj" />
 </Solution>
