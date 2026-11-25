@@ -5,12 +5,6 @@ using System.Text.RegularExpressions;
 namespace Lighting;
 
 internal record Luminaire(Vector2 Position, Photometry Distribution);
-internal record Room(double Width, double Depth)
-{
-    public const double MountHeight = 2.8;
-    public const double WorkHeight = 0.8;
-}
-
 internal sealed record Photometry(double[] Vertical, double[] Horizontal, double[][] Candela)
 {
     public static Photometry Sample { get; } = new([0, 30, 60, 90], [0], [[780, 550, 130, 0]]);
@@ -108,19 +102,31 @@ internal static class Illuminance
     public const int Columns = 32;
     public const int Rows = 24;
 
+    public static double Mean(double[,] result) =>
+        result.Cast<double>().Where(double.IsFinite).DefaultIfEmpty(double.NaN).Average();
+
     public static double[,] Calculate(Room room, IReadOnlyList<Luminaire> lights, CancellationToken cancellation)
     {
         var result = new double[Columns, Rows];
-        var height = Room.MountHeight - Room.WorkHeight;
+        var height = room.Height - Room.WorkHeight;
         for (var y = 0; y < Rows; y++)
         {
             cancellation.ThrowIfCancellationRequested();
             for (var x = 0; x < Columns; x++)
             {
+                var point = new RoomPoint(
+                    room.MinX + (x + 0.5) * room.Width / Columns,
+                    room.MinY + (y + 0.5) * room.Depth / Rows);
+                if (!room.Contains(point))
+                {
+                    result[x, y] = double.NaN;
+                    continue;
+                }
+
                 foreach (var light in lights)
                 {
-                    var dx = (x + 0.5) * room.Width / Columns - light.Position.X;
-                    var dy = (y + 0.5) * room.Depth / Rows - light.Position.Y;
+                    var dx = point.X - light.Position.X;
+                    var dy = point.Y - light.Position.Y;
                     var distance = Math.Sqrt(dx * dx + dy * dy + height * height);
                     var cosine = height / distance;
                     var gamma = Math.Acos(cosine) * 180 / Math.PI;

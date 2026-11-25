@@ -18,19 +18,19 @@ internal sealed partial class EditorWindow : Window
     private readonly Button _remove = new() { Content = "Удалить" };
     private CancellationTokenSource? _pending;
     private string _resultStatus = "Расчётная плоскость · 0,8 м";
-    private int _revision;
-    private readonly NumericUpDown _width = Dimension(8);
-    private readonly NumericUpDown _depth = Dimension(6);
+    private readonly TextBox _height = new() { Text = 2.8.ToString(), Width = 72 };
 
-    public Room Room { get; private set; } = new(8, 6);
-    public List<Luminaire> Lights { get; } =
+    private readonly EditorScene _scene = new(new Room(8, 6),
     [
         new(new Vector2(2, 2), Photometry.Sample),
         new(new Vector2(6, 2), Photometry.Sample),
         new(new Vector2(4, 4), Photometry.Sample)
-    ];
+    ]);
+
+    public Room Room => _scene.Room;
+    public IReadOnlyList<Luminaire> Lights => _scene.Lights;
     public int Selected { get; private set; } = -1;
-    public double[,]? Result { get; private set; }
+    public double[,]? Result => _scene.Result;
 
     public EditorWindow()
     {
@@ -50,21 +50,31 @@ internal sealed partial class EditorWindow : Window
         views.Children.Add(plan);
         views.Children.Add(orbit);
 
-        var resize = new Button { Content = "Задать размер" };
-        resize.Click += (_, _) =>
+        var draw = new Button { Content = "Новый контур" };
+        draw.Click += (_, _) =>
         {
-            if (_width.Value is not decimal w || _depth.Value is not decimal d ||
-                w is < 2 or > 30 || d is < 2 or > 30)
-            {
-                _status.Text = "Введите размеры помещения от 2 до 30 м.";
-                return;
-            }
-
-            Room = new Room((double)w, (double)d);
-            for (var i = 0; i < Lights.Count; i++)
-                Lights[i] = Lights[i] with { Position = Constrain(Lights[i].Position) };
-            SceneChanged();
+            _plan.BeginOutline(true);
+            _status.Text = "Поставьте вершины на плане. Нажмите первую вершину или «Замкнуть».";
         };
+        var edit = new Button { Content = "Править вершины" };
+        edit.Click += (_, _) =>
+        {
+            _plan.BeginOutline(false);
+            _status.Text = "Перетащите вершину. Двойной щелчок по стене добавляет вершину, правый щелчок по вершине удаляет её.";
+        };
+        var accept = new Button { Content = "Замкнуть" };
+        accept.Click += (_, _) => _plan.AcceptOutline();
+        var cancel = new Button { Content = "Выйти из режима" };
+        cancel.Click += (_, _) =>
+        {
+            _plan.CancelOutline();
+            Refresh();
+        };
+        var setHeight = new Button { Content = "Задать высоту" };
+        setHeight.Click += (_, _) => ApplyOutline(Room.Vertices);
+        var outlineToolbar = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        foreach (var control in new Control[] { draw, edit, accept, cancel, Label("Высота, м", 12, Muted), _height, setHeight })
+            outlineToolbar.Children.Add(control);
 
         var add = new Button { Content = "Добавить" };
         add.Click += (_, _) => AddLight(Photometry.Sample);
@@ -74,16 +84,14 @@ internal sealed partial class EditorWindow : Window
         {
             if (Selected < 0)
                 return;
-            Lights.RemoveAt(Selected);
+            _scene.RemoveLight(Selected);
             Selected = -1;
             SceneChanged();
         };
         _calculate.Click += async (_, _) => await Calculate();
 
         var toolbar = new WrapPanel { ItemSpacing = 8, LineSpacing = 6 };
-        toolbar.Children.Add(DimensionLabel("Ширина, м", _width));
-        toolbar.Children.Add(DimensionLabel("Глубина, м", _depth));
-        foreach (var control in new[] { resize, add, import, _remove, _calculate })
+        foreach (var control in new[] { add, import, _remove, _calculate })
         {
             control.VerticalAlignment = VerticalAlignment.Bottom;
             toolbar.Children.Add(control);
@@ -92,6 +100,7 @@ internal sealed partial class EditorWindow : Window
         var header = new StackPanel { Spacing = 10 };
         header.Children.Add(Label("Проект освещения", 27, Brushes.White, FontWeight.SemiBold));
         header.Children.Add(ProjectToolbar());
+        header.Children.Add(outlineToolbar);
         header.Children.Add(toolbar);
         var footer = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto"), ColumnSpacing = 12 };
         Grid.SetColumn(_selection, 1);
@@ -122,25 +131,38 @@ internal sealed partial class EditorWindow : Window
 
     public void MoveSelected(Vector2 position)
     {
-        if (Selected < 0)
-            return;
-
-        var snapped = new Vector2(MathF.Round(position.X * 4) / 4, MathF.Round(position.Y * 4) / 4);
-        snapped = Constrain(snapped);
-        if (snapped == Lights[Selected].Position)
-            return;
-
-        Lights[Selected] = Lights[Selected] with { Position = snapped };
-        SceneChanged();
+        if (Selected >= 0 && _scene.TryMoveLight(Selected, position))
+            SceneChanged();
     }
 
-    private Vector2 Constrain(Vector2 point) => Vector2.Clamp(point,
-        new Vector2(0.25f), new Vector2((float)Room.Width - 0.25f, (float)Room.Depth - 0.25f));
+    public bool ApplyOutline(IEnumerable<RoomPoint> vertices)
+    {
+        if (!double.TryParse(_height.Text, out var height))
+        {
+            _status.Text = "Введите высоту в метрах.";
+            return false;
+        }
+
+        var revision = _scene.Revision;
+        if (!_scene.TryApplyOutline(vertices, height, out var error))
+        {
+            _status.Text = error;
+            return false;
+        }
+
+        if (revision != _scene.Revision)
+            SceneChanged();
+        return true;
+    }
 
     private void AddLight(Photometry distribution)
     {
-        var position = new Vector2((float)Room.Width / 2, (float)Room.Depth / 2);
-        Lights.Add(new Luminaire(position, distribution));
+        if (!_scene.TryAddLight(distribution))
+        {
+            _status.Text = "Координаты помещения слишком точны для размещения светильника.";
+            return;
+        }
+
         Selected = Lights.Count - 1;
         SceneChanged();
     }
@@ -181,23 +203,22 @@ internal sealed partial class EditorWindow : Window
         _status.Text = "Расчёт освещённости…";
         var room = Room;
         var lights = Lights.ToArray();
-        var revision = _revision;
+        var revision = _scene.Revision;
         try
         {
             var result = await Task.Run(() => Illuminance.Calculate(room, lights, cancellation.Token));
-            if (revision != _revision || cancellation.IsCancellationRequested)
+            if (cancellation.IsCancellationRequested || !_scene.TryPublishResult(revision, result))
                 return;
 
-            Result = result;
-            var average = result.Cast<double>().Average();
-            _resultStatus = $"Средняя: {average:F0} лк   ·   Шкала 0–350+ лк   ·   Плоскость 0,8 м";
+            var average = Illuminance.Mean(result);
+            _resultStatus = double.IsNaN(average) ? "Внутри контура нет точек расчётной сетки." : $"Средняя: {average:F0} лк   ·   Шкала 0–350+ лк   ·   Плоскость 0,8 м";
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested)
         {
         }
         finally
         {
-            if (revision == _revision && cancellation.IsCancellationRequested)
+            if (revision == _scene.Revision && cancellation.IsCancellationRequested)
                 _resultStatus = "Расчёт отменён";
             _pending = null;
             _calculate.Content = "Рассчитать";
@@ -207,10 +228,8 @@ internal sealed partial class EditorWindow : Window
 
     private void SceneChanged()
     {
-        _revision++;
         UpdateProjectTitle();
         _pending?.Cancel();
-        Result = null;
         _resultStatus = "Сцена изменена · запустите расчёт";
         Refresh();
     }
@@ -249,14 +268,4 @@ internal sealed partial class EditorWindow : Window
     private static TextBlock Label(string title, double size, IBrush color, FontWeight weight = FontWeight.Normal) =>
         new() { Text = title, FontSize = size, Foreground = color, FontWeight = weight };
 
-    private static NumericUpDown Dimension(double value) =>
-        new() { Minimum = 2, Maximum = 30, Value = (decimal)value, Increment = 0.25m, Width = 106 };
-
-    private static StackPanel DimensionLabel(string title, Control input)
-    {
-        var stack = new StackPanel { Spacing = 3 };
-        stack.Children.Add(Label(title, 12, Muted));
-        stack.Children.Add(input);
-        return stack;
-    }
 }

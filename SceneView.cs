@@ -6,7 +6,7 @@ using Avalonia.Media;
 
 namespace Lighting;
 
-internal sealed class SceneView(EditorWindow editor, bool orbitView) : Control
+internal sealed partial class SceneView(EditorWindow editor, bool orbitView) : Control
 {
     private static readonly IBrush Panel = Brush.Parse("#101925");
     private static readonly IBrush Floor = Brush.Parse("#1B2938");
@@ -39,39 +39,53 @@ internal sealed class SceneView(EditorWindow editor, bool orbitView) : Control
             return;
 
         var room = editor.Room;
-        var corners = new[] { (0d, 0d), (room.Width, 0d), (room.Width, room.Depth), (0d, room.Depth) };
+        var corners = room.Vertices;
         if (orbitView)
         {
-            for (var i = 0; i < corners.Length; i++)
+            for (var i = 0; i < corners.Count; i++)
             {
                 var (x, y) = corners[i];
-                var (nextX, nextY) = corners[(i + 1) % corners.Length];
-                if (Depth((x + nextX) / 2, (y + nextY) / 2) < 0)
+                var (nextX, nextY) = corners[(i + 1) % corners.Count];
+                var across = Math.Cos(_angle) * (nextX - x) - Math.Sin(_angle) * (nextY - y);
+                if (across * room.Winding > 0)
                     Polygon(context, Wall, Edge, Project(x, y), Project(nextX, nextY),
-                        Project(nextX, nextY, Room.MountHeight), Project(x, y, Room.MountHeight));
+                        Project(nextX, nextY, room.Height), Project(x, y, room.Height));
             }
         }
 
-        Polygon(context, Floor, Edge, corners.Select(corner => Project(corner.Item1, corner.Item2)).ToArray());
-        for (var x = 1; x < room.Width; x++)
-            context.DrawLine(GridLine, Project(x, 0), Project(x, room.Depth));
-        for (var y = 1; y < room.Depth; y++)
-            context.DrawLine(GridLine, Project(0, y), Project(room.Width, y));
+        var floor = Shape(corners.Select(p => Project(p.X, p.Y)).ToArray());
+        context.DrawGeometry(Floor, Edge, floor);
+        using (context.PushGeometryClip(floor))
+        {
+            for (var i = 1; i < Math.Min(room.Width, 200); i++)
+                context.DrawLine(GridLine, Project(room.MinX + i, room.MinY),
+                    Project(room.MinX + i, room.MinY + room.Depth));
+            for (var i = 1; i < Math.Min(room.Depth, 200); i++)
+                context.DrawLine(GridLine, Project(room.MinX, room.MinY + i),
+                    Project(room.MinX + room.Width, room.MinY + i));
+        }
 
         if (editor.Result is { } result)
         {
             var height = orbitView ? Room.WorkHeight : 0;
+            using var mapClip = context.PushGeometryClip(Shape(corners.Select(p => Project(p.X, p.Y, height)).ToArray()));
             var dx = room.Width / Illuminance.Columns;
             var dy = room.Depth / Illuminance.Rows;
             for (var y = 0; y < Illuminance.Rows; y++)
             for (var x = 0; x < Illuminance.Columns; x++)
             {
+                if (double.IsNaN(result[x, y]))
+                    continue;
                 var band = (int)Math.Clamp(result[x, y] / 50, 0, Heat.Length - 1);
-                Polygon(context, Heat[band], null, Project(x * dx, y * dy, height),
-                    Project((x + 1) * dx, y * dy, height), Project((x + 1) * dx, (y + 1) * dy, height),
-                    Project(x * dx, (y + 1) * dy, height));
+                var left = room.MinX + x * dx;
+                var top = room.MinY + y * dy;
+                Polygon(context, Heat[band], null, Project(left, top, height),
+                    Project(left + dx, top, height), Project(left + dx, top + dy, height),
+                    Project(left, top + dy, height));
             }
         }
+
+        DrawOutlineEditor(context);
 
         foreach (var index in LightDrawOrder())
         {
@@ -90,7 +104,10 @@ internal sealed class SceneView(EditorWindow editor, bool orbitView) : Control
             .OrderBy(index => index == editor.Selected)
             .ThenBy(index => Depth(editor.Lights[index].Position.X, editor.Lights[index].Position.Y));
 
-    private static void Polygon(DrawingContext context, IBrush? fill, Pen? pen, params Point[] points)
+    private static void Polygon(DrawingContext context, IBrush? fill, Pen? pen, params Point[] points) =>
+        context.DrawGeometry(fill, pen, Shape(points));
+
+    private static StreamGeometry Shape(Point[] points)
     {
         var geometry = new StreamGeometry();
         using (var path = geometry.Open())
@@ -101,27 +118,30 @@ internal sealed class SceneView(EditorWindow editor, bool orbitView) : Control
             path.EndFigure(true);
         }
 
-        context.DrawGeometry(fill, pen, geometry);
+        return geometry;
     }
 
     private double Scale => Math.Max(1, Math.Min(
         (Bounds.Width - 46) / (orbitView ? Math.Sqrt(editor.Room.Width * editor.Room.Width +
             editor.Room.Depth * editor.Room.Depth) : editor.Room.Width),
         (Bounds.Height - 46) / (orbitView ? 0.52 * Math.Sqrt(editor.Room.Width * editor.Room.Width +
-            editor.Room.Depth * editor.Room.Depth) + Room.MountHeight * 0.8 : editor.Room.Depth))) * _zoom;
+            editor.Room.Depth * editor.Room.Depth) + editor.Room.Height * 0.8 : editor.Room.Depth))) * _zoom;
 
-    private Point Center => new(Bounds.Width / 2, Bounds.Height / 2 + (orbitView ? Scale * Room.MountHeight * 0.4 : 0));
+    private double MidX => editor.Room.MinX + editor.Room.Width / 2;
+    private double MidY => editor.Room.MinY + editor.Room.Depth / 2;
+
+    private Point Center => new(Bounds.Width / 2, Bounds.Height / 2 + (orbitView ? Scale * editor.Room.Height * 0.4 : 0));
 
     private double Depth(double x, double y) =>
-        Math.Sin(_angle) * (x - editor.Room.Width / 2) + Math.Cos(_angle) * (y - editor.Room.Depth / 2);
+        Math.Sin(_angle) * (x - MidX) + Math.Cos(_angle) * (y - MidY);
 
     private Point Project(double x, double y, double z = 0)
     {
         if (!orbitView)
-            return Center + new Vector(x - editor.Room.Width / 2, y - editor.Room.Depth / 2) * Scale;
+            return Center + new Vector(x - MidX, y - MidY) * Scale;
 
-        var across = Math.Cos(_angle) * (x - editor.Room.Width / 2) -
-            Math.Sin(_angle) * (y - editor.Room.Depth / 2);
+        var across = Math.Cos(_angle) * (x - MidX) -
+            Math.Sin(_angle) * (y - MidY);
         return Center + new Vector(across, Depth(x, y) * 0.52 - z * 0.8) * Scale;
     }
 
@@ -137,18 +157,24 @@ internal sealed class SceneView(EditorWindow editor, bool orbitView) : Control
             y = -Math.Sin(_angle) * displacement.X + Math.Cos(_angle) * depth;
         }
 
-        return new Vector2((float)(x + editor.Room.Width / 2), (float)(y + editor.Room.Depth / 2));
+        return new Vector2((float)(x + MidX), (float)(y + MidY));
     }
 
-    private Point Marker(Luminaire light) => Project(light.Position.X, light.Position.Y, Room.MountHeight);
+    private Point Marker(Luminaire light) => Project(light.Position.X, light.Position.Y, editor.Room.Height);
 
     protected override void OnPointerPressed(PointerPressedEventArgs e)
     {
         base.OnPointerPressed(e);
-        if (_pointer != null || !e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        if (_pointer != null)
             return;
 
         var point = e.GetPosition(this);
+        if (!orbitView && HandleOutlinePress(e, point))
+            return;
+
+        if (!e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+            return;
+
         var hit = LightDrawOrder().Reverse()
             .FirstOrDefault(index => WithinMarker(Marker(editor.Lights[index]), point), -1);
         if (hit < 0 && !orbitView)
@@ -161,7 +187,7 @@ internal sealed class SceneView(EditorWindow editor, bool orbitView) : Control
         if (_dragLight)
         {
             editor.Select(hit);
-            _dragOffset = editor.Lights[hit].Position - Unproject(point, Room.MountHeight);
+            _dragOffset = editor.Lights[hit].Position - Unproject(point, editor.Room.Height);
         }
 
         _last = point;
@@ -184,8 +210,10 @@ internal sealed class SceneView(EditorWindow editor, bool orbitView) : Control
             return;
 
         var point = e.GetPosition(this);
+        if (MoveOutlineVertex(point))
+            return;
         if (_dragLight)
-            editor.MoveSelected(Unproject(point, Room.MountHeight) + _dragOffset);
+            editor.MoveSelected(Unproject(point, editor.Room.Height) + _dragOffset);
         else
         {
             _angle += (point.X - _last.X) * 0.013;
@@ -200,14 +228,20 @@ internal sealed class SceneView(EditorWindow editor, bool orbitView) : Control
         base.OnPointerReleased(e);
         if (e.Pointer == _pointer &&
             e.InitialPressMouseButton == MouseButton.Left)
+        {
+            CommitOutlineVertex();
             e.Pointer.Capture(null);
+        }
     }
 
     protected override void OnPointerCaptureLost(PointerCaptureLostEventArgs e)
     {
         base.OnPointerCaptureLost(e);
         if (e.Pointer == _pointer)
+        {
             _pointer = null;
+            CancelVertexDrag();
+        }
     }
 
     protected override void OnPointerWheelChanged(PointerWheelEventArgs e)

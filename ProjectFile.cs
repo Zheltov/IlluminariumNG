@@ -7,13 +7,15 @@ internal sealed record LightingProject(Room Room, Luminaire[] Lights);
 
 internal static class ProjectFile
 {
-    private const int Version = 1;
+    private const int Version = 2;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
     };
 
-    private sealed record ProjectData(int FormatVersion, double Width, double Depth, LightData?[]? Lights);
+    private sealed record LegacyProjectData(double Width, double Depth, LightData?[]? Lights);
+    private sealed record ProjectData(int FormatVersion, double Height, VertexData?[]? Vertices, LightData?[]? Lights);
+    private sealed record VertexData(double? X, double? Y);
     private sealed record LightData(float? X, float? Y, double[]? Vertical, double[]? Horizontal, double[]?[]? Candela);
 
     public static async Task<LightingProject> ReadAsync(Stream stream)
@@ -24,24 +26,50 @@ internal static class ProjectFile
             !root.TryGetProperty("formatVersion", out var version) || version.ValueKind != JsonValueKind.Number ||
             !version.TryGetInt32(out var number))
             throw new FormatException("В файле отсутствует корректная версия формата проекта.");
-        if (number != Version)
-            throw new FormatException($"Версия формата проекта {number} не поддерживается.");
+        Room room;
+        LightData?[]? lightData;
+        switch (number)
+        {
+            case 1:
+                var legacy = root.Deserialize<LegacyProjectData>(JsonOptions)!;
+                if (!(legacy.Width is >= 2 and <= 30 && legacy.Depth is >= 2 and <= 30))
+                    throw new FormatException("Некорректные размеры помещения.");
+                room = new Room(legacy.Width, legacy.Depth);
+                lightData = legacy.Lights;
+                break;
+            case Version:
+                var data = root.Deserialize<ProjectData>(JsonOptions)!;
+                if (data.Vertices is null || data.Vertices.Any(p => p?.X is null || p.Y is null))
+                    throw new FormatException("Некорректные вершины помещения.");
+                try
+                {
+                    room = new Room(data.Vertices.Select(p => new RoomPoint(p!.X!.Value, p.Y!.Value)), data.Height);
+                }
+                catch (ArgumentException error)
+                {
+                    throw new FormatException(error.Message, error);
+                }
+                lightData = data.Lights;
+                break;
+            default:
+                throw new FormatException($"Версия формата проекта {number} не поддерживается.");
+        }
 
-        var data = root.Deserialize<ProjectData>(JsonOptions)!;
-        if (!(data.Width is >= 2 and <= 30 && data.Depth is >= 2 and <= 30) || data.Lights is null)
-            throw new FormatException("Некорректные размеры помещения или список светильников.");
+        if (lightData is null)
+            throw new FormatException("Некорректный список светильников.");
 
-        var room = new Room(data.Width, data.Depth);
-        var lights = new Luminaire[data.Lights.Length];
+        var lights = new Luminaire[lightData.Length];
         for (var i = 0; i < lights.Length; i++)
-            lights[i] = ReadLight(room, data.Lights[i], i + 1);
+            lights[i] = ReadLight(room, lightData[i], i + 1, number == 1);
         return new LightingProject(room, lights);
     }
 
-    private static Luminaire ReadLight(Room room, LightData? data, int number)
+    private static Luminaire ReadLight(Room room, LightData? data, int number, bool legacy)
     {
         if (data?.X is not float x || data.Y is not float y ||
-            !(x >= 0.25f && x <= (float)room.Width - 0.25f && y >= 0.25f && y <= (float)room.Depth - 0.25f))
+            !(legacy
+                ? x >= 0.25f && x <= (float)room.Width - 0.25f && y >= 0.25f && y <= (float)room.Depth - 0.25f
+                : room.Contains(new Vector2(x, y))))
             throw new FormatException($"Некорректные координаты светильника {number}.");
 
         if (data.Vertical is not { Length: >= 2 } vertical || data.Horizontal is not { Length: >= 1 } horizontal ||
@@ -69,8 +97,9 @@ internal static class ProjectFile
     {
         var lights = project.Lights.Select(light => new LightData(light.Position.X, light.Position.Y,
             light.Distribution.Vertical, light.Distribution.Horizontal, light.Distribution.Candela)).ToArray();
+        var vertices = project.Room.Vertices.Select(p => new VertexData(p.X, p.Y)).ToArray();
         return JsonSerializer.SerializeAsync(stream,
-            new ProjectData(Version, project.Room.Width, project.Room.Depth, lights), JsonOptions);
+            new ProjectData(Version, project.Room.Height, vertices, lights), JsonOptions);
     }
 
     public static async Task SaveAsync(string path, LightingProject project)

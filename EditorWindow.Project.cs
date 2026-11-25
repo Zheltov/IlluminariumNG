@@ -19,7 +19,7 @@ internal sealed partial class EditorWindow
     private bool _fileAction;
     private bool _allowClose;
 
-    private bool IsDirty => _revision != _savedRevision;
+    private bool IsDirty => _scene.Revision != _savedRevision;
 
     private StackPanel ProjectToolbar()
     {
@@ -86,12 +86,12 @@ internal sealed partial class EditorWindow
         }
 
         var snapshot = new LightingProject(Room, Lights.ToArray());
-        var revision = _revision;
+        var revision = _scene.Revision;
         await ProjectFile.SaveAsync(path, snapshot);
         _projectPath = path;
         _savedRevision = revision;
         UpdateProjectTitle();
-        return revision == _revision;
+        return revision == _scene.Revision;
     }
 
     private async Task OpenProject()
@@ -120,13 +120,11 @@ internal sealed partial class EditorWindow
             project = new LightingProject(Room, Lights.ToArray());
 
         _projectPath = path;
-        Room = project.Room;
-        _width.Value = (decimal)Room.Width;
-        _depth.Value = (decimal)Room.Depth;
-        Lights.Clear();
-        Lights.AddRange(project.Lights);
+        _scene.Replace(project.Room, project.Lights);
+        _height.Text = Room.Height.ToString();
+        _plan.CancelOutline();
         Selected = -1;
-        _savedRevision = _revision + 1;
+        _savedRevision = _scene.Revision;
         SceneChanged();
     }
 
